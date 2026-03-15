@@ -23,10 +23,13 @@ interface TokenRefreshFailure {
 }
 
 interface TokenRefreshCurrentRun {
+    trigger: 'AUTO' | 'MANUAL';
     total: number;
     completed: number;
     success: number;
     failed: number;
+    groupId: number | null;
+    requestedByUsername: string | null;
     startedAt: string;
     durationMs: number;
     recentFailures: TokenRefreshFailure[];
@@ -310,6 +313,10 @@ const SettingsPage: React.FC = () => {
     const progressPercent = tokenRefreshStatus?.currentRun?.total
         ? Math.min(100, Math.round((tokenRefreshStatus.currentRun.completed / tokenRefreshStatus.currentRun.total) * 100))
         : 0;
+    const activeRun = tokenRefreshStatus?.currentRun ?? null;
+    const isAutoRefreshRunning = activeRun?.trigger === 'AUTO';
+    const isManualRefreshRunning = activeRun?.trigger === 'MANUAL';
+    const displayedFailures = activeRun?.recentFailures ?? tokenRefreshStatus?.recentFailures ?? [];
 
     return (
         <div>
@@ -488,7 +495,9 @@ const SettingsPage: React.FC = () => {
                             <div>
                                 <Text type="secondary">自动任务：</Text>{' '}
                                 {tokenRefreshStatus.enabled ? <Tag color="success">已启用</Tag> : <Tag>已停用</Tag>}
-                                {tokenRefreshStatus.isRunning ? <Tag color="processing">运行中</Tag> : <Tag>空闲</Tag>}
+                                {isAutoRefreshRunning ? <Tag color="processing">自动执行中</Tag> : null}
+                                {isManualRefreshRunning ? <Tag color="processing">手动任务运行中</Tag> : null}
+                                {!tokenRefreshStatus.isRunning ? <Tag>空闲</Tag> : null}
                             </div>
 
                             <div style={{ display: 'grid', gap: 12 }}>
@@ -499,13 +508,19 @@ const SettingsPage: React.FC = () => {
                                     </div>
                                 </div>
                                 <div>
-                                    <Text type="secondary">上次执行</Text>
+                                    <Text type="secondary">上次完成</Text>
                                     <div style={{ fontSize: 16 }}>{formatDateTime(tokenRefreshStatus.lastRunAt)}</div>
                                 </div>
                                 <div>
                                     <Text type="secondary">下次计划</Text>
                                     <div style={{ fontSize: 16 }}>
-                                        {tokenRefreshStatus.enabled ? formatDateTime(tokenRefreshStatus.nextRunAt) : '自动任务已停用'}
+                                        {!tokenRefreshStatus.enabled
+                                            ? '自动任务已停用'
+                                            : isAutoRefreshRunning
+                                                ? '当前自动任务执行中，完成后重新计算'
+                                                : isManualRefreshRunning
+                                                    ? '当前有手动刷新任务运行中，自动任务将在空闲后继续调度'
+                                                : formatDateTime(tokenRefreshStatus.nextRunAt)}
                                     </div>
                                 </div>
                             </div>
@@ -514,34 +529,55 @@ const SettingsPage: React.FC = () => {
                                 <Alert
                                     type={tokenRefreshStatus.lastResult.failed > 0 ? 'warning' : 'success'}
                                     showIcon
-                                    message={`最近一次执行: 成功 ${tokenRefreshStatus.lastResult.success} / 失败 ${tokenRefreshStatus.lastResult.failed} / 总计 ${tokenRefreshStatus.lastResult.total}`}
-                                    description={`耗时 ${formatDuration(tokenRefreshStatus.lastResult.durationMs)}`}
+                                    message={`最近一次自动完成: 成功 ${tokenRefreshStatus.lastResult.success} / 失败 ${tokenRefreshStatus.lastResult.failed} / 总计 ${tokenRefreshStatus.lastResult.total}`}
+                                    description={`完成时间 ${formatDateTime(tokenRefreshStatus.lastRunAt)}，耗时 ${formatDuration(tokenRefreshStatus.lastResult.durationMs)}`}
                                 />
                             ) : (
                                 <Text type="secondary">暂无执行记录</Text>
                             )}
 
-                            {tokenRefreshStatus.currentRun ? (
-                                <Card size="small" title="运行中进度">
+                            {isManualRefreshRunning ? (
+                                <Alert
+                                    type="info"
+                                    showIcon
+                                    message="当前有手动刷新任务运行中"
+                                    description={`触发人 ${activeRun?.requestedByUsername || '未知管理员'}，范围 ${activeRun?.groupId ? `分组 #${activeRun.groupId}` : '全部未禁用邮箱'}。本页的“最近一次自动完成”只统计自动任务。`}
+                                />
+                            ) : null}
+
+                            {activeRun ? (
+                                <Card size="small" title={activeRun.trigger === 'AUTO' ? '当前自动任务进度' : '当前手动任务进度'}>
                                     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                                         <Progress
                                             percent={progressPercent}
                                             status="active"
-                                            format={() => `${tokenRefreshStatus.currentRun?.completed ?? 0} / ${tokenRefreshStatus.currentRun?.total ?? 0}`}
+                                            format={() => `${activeRun.completed} / ${activeRun.total}`}
                                         />
                                         <div style={{ display: 'grid', gap: 12 }}>
                                             <div>
+                                                <Text type="secondary">触发方式</Text>
+                                                <div style={{ fontSize: 16 }}>
+                                                    {activeRun.trigger === 'AUTO' ? '系统自动调度' : `管理员手动触发${activeRun.requestedByUsername ? `（${activeRun.requestedByUsername}）` : ''}`}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <Text type="secondary">执行范围</Text>
+                                                <div style={{ fontSize: 16 }}>
+                                                    {activeRun.groupId ? `分组 #${activeRun.groupId}` : '全部未禁用邮箱'}
+                                                </div>
+                                            </div>
+                                            <div>
                                                 <Text type="secondary">开始时间</Text>
-                                                <div style={{ fontSize: 16 }}>{formatDateTime(tokenRefreshStatus.currentRun.startedAt)}</div>
+                                                <div style={{ fontSize: 16 }}>{formatDateTime(activeRun.startedAt)}</div>
                                             </div>
                                             <div>
                                                 <Text type="secondary">已运行</Text>
-                                                <div style={{ fontSize: 16 }}>{formatDuration(tokenRefreshStatus.currentRun.durationMs)}</div>
+                                                <div style={{ fontSize: 16 }}>{formatDuration(activeRun.durationMs)}</div>
                                             </div>
                                             <div>
                                                 <Text type="secondary">当前统计</Text>
                                                 <div style={{ fontSize: 16 }}>
-                                                    成功 {tokenRefreshStatus.currentRun.success} / 失败 {tokenRefreshStatus.currentRun.failed} / 待处理 {Math.max(0, tokenRefreshStatus.currentRun.total - tokenRefreshStatus.currentRun.completed)}
+                                                    成功 {activeRun.success} / 失败 {activeRun.failed} / 待处理 {Math.max(0, activeRun.total - activeRun.completed)}
                                                 </div>
                                             </div>
                                         </div>
@@ -551,11 +587,13 @@ const SettingsPage: React.FC = () => {
 
                             <Card
                                 size="small"
-                                title={tokenRefreshStatus.isRunning ? '当前批次最近失败' : '最近失败明细'}
+                                title={activeRun
+                                    ? activeRun.trigger === 'AUTO' ? '当前自动任务最近失败' : '当前手动任务最近失败'
+                                    : '最近一次自动任务失败'}
                             >
-                                {tokenRefreshStatus.recentFailures.length > 0 ? (
+                                {displayedFailures.length > 0 ? (
                                     <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                                        {tokenRefreshStatus.recentFailures.map((failure) => (
+                                        {displayedFailures.map((failure) => (
                                             <div
                                                 key={`${failure.emailId}-${failure.email}-${failure.message}`}
                                                 style={{
@@ -572,7 +610,7 @@ const SettingsPage: React.FC = () => {
                                     </Space>
                                 ) : (
                                     <Text type="secondary">
-                                        {tokenRefreshStatus.isRunning ? '当前批次暂无失败记录' : '最近没有失败记录'}
+                                        {activeRun ? '当前任务暂无失败记录' : '最近没有自动任务失败记录'}
                                     </Text>
                                 )}
                             </Card>

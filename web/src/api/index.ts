@@ -547,10 +547,13 @@ export const emailApi = {
             isRunning: boolean;
             lastResult: { total: number; success: number; failed: number; durationMs: number } | null;
             currentRun: {
+                trigger: 'AUTO' | 'MANUAL';
                 total: number;
                 completed: number;
                 success: number;
                 failed: number;
+                groupId: number | null;
+                requestedByUsername: string | null;
                 startedAt: string;
                 durationMs: number;
                 recentFailures: Array<{ emailId: number; email: string; success: boolean; message: string }>;

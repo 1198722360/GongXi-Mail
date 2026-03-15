@@ -123,14 +123,33 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
             groupId: z.number().int().positive().optional(),
         }).optional().parse(request.body);
 
-        const stats = tokenRefreshService.getRefreshStats();
-        if (stats.isRunning) {
+        if (tokenRefreshService.isRefreshRunning()) {
             throw new AppError('REFRESH_IN_PROGRESS', 'Token refresh is already running', 409);
         }
 
+        request.log.info({
+            trigger: 'MANUAL',
+            groupId: body?.groupId ?? null,
+            requestedById: request.user?.id ?? null,
+            requestedByUsername: request.user?.username ?? null,
+        }, 'Manual token refresh requested');
+
         // 异步执行，不阻塞请求
-        void tokenRefreshService.refreshAll({ groupId: body?.groupId }).catch((err) => {
-            request.log.error({ err, groupId: body?.groupId }, 'Manual token refresh failed');
+        void tokenRefreshService.refreshAll({
+            groupId: body?.groupId,
+            trigger: 'MANUAL',
+            requestedBy: request.user ? {
+                id: request.user.id,
+                username: request.user.username,
+            } : null,
+        }).catch((err) => {
+            request.log.error({
+                err,
+                trigger: 'MANUAL',
+                groupId: body?.groupId ?? null,
+                requestedById: request.user?.id ?? null,
+                requestedByUsername: request.user?.username ?? null,
+            }, 'Manual token refresh failed');
         });
         return { success: true, data: { message: 'Token refresh started' } };
     });
@@ -162,7 +181,7 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
     // ========================================
     fastify.get('/refresh-status', async () => {
         const settings = await tokenRefreshService.getTokenRefreshConfig();
-        const stats = tokenRefreshService.getRefreshStats(getTokenRefreshJobNextRunAt());
+        const stats = await tokenRefreshService.getRefreshStats(getTokenRefreshJobNextRunAt());
         return {
             success: true,
             data: {
@@ -179,13 +198,16 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
                     durationMs: stats.lastResult.durationMs,
                 } : null,
                 currentRun: stats.currentRun ? {
+                    trigger: stats.currentRun.trigger,
                     total: stats.currentRun.total,
                     completed: stats.currentRun.completed,
                     success: stats.currentRun.success,
                     failed: stats.currentRun.failed,
+                    groupId: stats.currentRun.groupId,
+                    requestedByUsername: stats.currentRun.requestedByUsername,
                     startedAt: stats.currentRun.startedAt,
                     durationMs: stats.currentRun.durationMs,
-                    recentFailures: stats.currentRun.recentFailures,
+                    recentFailures: stats.currentRun.recentFailures.slice().reverse(),
                 } : null,
                 recentFailures: stats.recentFailures,
             },

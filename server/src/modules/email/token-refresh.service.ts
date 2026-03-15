@@ -5,6 +5,8 @@ import { proxyFetch } from '../../lib/proxy.js';
 import { env } from '../../config/env.js';
 import type { Prisma } from '@prisma/client';
 
+export type TokenRefreshTrigger = 'AUTO' | 'MANUAL';
+
 interface RefreshResult {
     emailId: number;
     email: string;
@@ -12,21 +14,31 @@ interface RefreshResult {
     message: string;
 }
 
-interface BatchRefreshResult {
+interface BatchRefreshSummary {
     total: number;
     success: number;
     failed: number;
-    results: RefreshResult[];
     durationMs: number;
 }
 
-interface CurrentRefreshRun {
-    total: number;
-    completed: number;
-    success: number;
-    failed: number;
+interface BatchRefreshResult extends BatchRefreshSummary {
+    trigger: TokenRefreshTrigger;
+    groupId: number | null;
+    requestedById: number | null;
+    requestedByUsername: string | null;
     startedAt: Date;
-    durationMs: number;
+    completedAt: Date;
+    results: RefreshResult[];
+}
+
+interface CurrentRefreshRun extends BatchRefreshSummary {
+    trigger: TokenRefreshTrigger;
+    groupId: number | null;
+    requestedById: number | null;
+    requestedByUsername: string | null;
+    completed: number;
+    startedAt: Date;
+    completedAt: Date | null;
     recentFailures: RefreshResult[];
 }
 
@@ -34,7 +46,7 @@ interface RefreshStats {
     lastRunAt: Date | null;
     nextRunAt: Date | null;
     isRunning: boolean;
-    lastResult: BatchRefreshResult | null;
+    lastResult: BatchRefreshSummary | null;
     currentRun: CurrentRefreshRun | null;
     recentFailures: RefreshResult[];
 }
@@ -45,14 +57,20 @@ interface TokenRefreshConfig {
     concurrency: number;
 }
 
-// 模块级状态
-let isRunning = false;
-let lastResult: BatchRefreshResult | null = null;
-let lastRunAt: Date | null = null;
-let currentRun: CurrentRefreshRun | null = null;
-const TOKEN_REFRESH_ERROR_PREFIX = 'Token refresh';
-const SYSTEM_CONFIG_ID = 1;
-const RECENT_FAILURE_LIMIT = 10;
+interface TokenRefreshScheduleState extends TokenRefreshConfig {
+    lastRunAt: Date | null;
+    nextRunAt: Date | null;
+}
+
+interface RefreshAllOptions {
+    concurrency?: number;
+    groupId?: number;
+    trigger?: TokenRefreshTrigger;
+    requestedBy?: {
+        id: number;
+        username: string;
+    } | null;
+}
 
 interface OAuthTokenResponse {
     access_token?: string;
@@ -61,6 +79,38 @@ interface OAuthTokenResponse {
     error?: string;
     error_description?: string;
 }
+
+const TOKEN_REFRESH_ERROR_PREFIX = 'Token refresh';
+const SYSTEM_CONFIG_ID = 1;
+const RECENT_FAILURE_LIMIT = 10;
+
+const systemConfigSelect = {
+    tokenRefreshEnabled: true,
+    tokenRefreshIntervalHours: true,
+    tokenRefreshConcurrency: true,
+    tokenRefreshNextRunAt: true,
+    tokenRefreshLastAutoCompletedAt: true,
+    tokenRefreshLastAutoTotal: true,
+    tokenRefreshLastAutoSuccess: true,
+    tokenRefreshLastAutoFailed: true,
+    tokenRefreshLastAutoDurationMs: true,
+    tokenRefreshLastAutoFailures: true,
+} satisfies Prisma.SystemConfigSelect;
+
+type SystemConfigSnapshot = Prisma.SystemConfigGetPayload<{
+    select: typeof systemConfigSelect;
+}>;
+
+const defaultSystemConfigCreate = {
+    id: SYSTEM_CONFIG_ID,
+    tokenRefreshEnabled: env.TOKEN_REFRESH_ENABLED,
+    tokenRefreshIntervalHours: env.TOKEN_REFRESH_INTERVAL_HOURS,
+    tokenRefreshConcurrency: env.TOKEN_REFRESH_CONCURRENCY,
+};
+
+// 模块级运行态
+let isRunning = false;
+let currentRun: CurrentRefreshRun | null = null;
 
 /**
  * 并发控制工具：限制同时执行的 Promise 数量
@@ -108,11 +158,7 @@ function getSuccessUpdateData(existingErrorMessage: string | null) {
     return {};
 }
 
-function mapSystemConfigToTokenRefreshConfig(config: {
-    tokenRefreshEnabled: boolean;
-    tokenRefreshIntervalHours: number;
-    tokenRefreshConcurrency: number;
-}): TokenRefreshConfig {
+function mapSystemConfigToTokenRefreshConfig(config: SystemConfigSnapshot): TokenRefreshConfig {
     return {
         enabled: config.tokenRefreshEnabled,
         intervalHours: config.tokenRefreshIntervalHours,
@@ -127,36 +173,101 @@ function appendRecentFailure(target: RefreshResult[], result: RefreshResult) {
     }
 }
 
-function getRecentFailuresFromBatchResult(result: BatchRefreshResult | null): RefreshResult[] {
-    if (!result) {
+function buildLastResult(config: SystemConfigSnapshot): BatchRefreshSummary | null {
+    if (
+        config.tokenRefreshLastAutoTotal === null ||
+        config.tokenRefreshLastAutoSuccess === null ||
+        config.tokenRefreshLastAutoFailed === null ||
+        config.tokenRefreshLastAutoDurationMs === null
+    ) {
+        return null;
+    }
+
+    return {
+        total: config.tokenRefreshLastAutoTotal,
+        success: config.tokenRefreshLastAutoSuccess,
+        failed: config.tokenRefreshLastAutoFailed,
+        durationMs: config.tokenRefreshLastAutoDurationMs,
+    };
+}
+
+function parseStoredFailures(value: Prisma.JsonValue | null): RefreshResult[] {
+    if (!Array.isArray(value)) {
         return [];
     }
 
-    return result.results
-        .filter((item) => !item.success)
-        .slice(-RECENT_FAILURE_LIMIT)
-        .reverse();
+    return value
+        .map((item) => {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) {
+                return null;
+            }
+
+            const record = item as Record<string, unknown>;
+            if (
+                typeof record.emailId !== 'number' ||
+                typeof record.email !== 'string' ||
+                typeof record.success !== 'boolean' ||
+                typeof record.message !== 'string'
+            ) {
+                return null;
+            }
+
+            return {
+                emailId: record.emailId,
+                email: record.email,
+                success: record.success,
+                message: record.message,
+            } satisfies RefreshResult;
+        })
+        .filter((item): item is RefreshResult => item !== null);
+}
+
+function serializeFailures(failures: RefreshResult[]): Prisma.InputJsonValue {
+    return failures.map((failure) => ({
+        emailId: failure.emailId,
+        email: failure.email,
+        success: failure.success,
+        message: failure.message,
+    })) as Prisma.InputJsonValue;
+}
+
+async function getSystemConfigSnapshot(): Promise<SystemConfigSnapshot> {
+    return prisma.systemConfig.upsert({
+        where: { id: SYSTEM_CONFIG_ID },
+        update: {},
+        create: defaultSystemConfigCreate,
+        select: systemConfigSelect,
+    });
 }
 
 export const tokenRefreshService = {
     async getTokenRefreshConfig(): Promise<TokenRefreshConfig> {
-        const config = await prisma.systemConfig.upsert({
-            where: { id: SYSTEM_CONFIG_ID },
-            update: {},
-            create: {
-                id: SYSTEM_CONFIG_ID,
-                tokenRefreshEnabled: env.TOKEN_REFRESH_ENABLED,
-                tokenRefreshIntervalHours: env.TOKEN_REFRESH_INTERVAL_HOURS,
-                tokenRefreshConcurrency: env.TOKEN_REFRESH_CONCURRENCY,
-            },
-            select: {
-                tokenRefreshEnabled: true,
-                tokenRefreshIntervalHours: true,
-                tokenRefreshConcurrency: true,
-            },
-        });
-
+        const config = await getSystemConfigSnapshot();
         return mapSystemConfigToTokenRefreshConfig(config);
+    },
+
+    async getTokenRefreshScheduleState(): Promise<TokenRefreshScheduleState> {
+        const config = await getSystemConfigSnapshot();
+        return {
+            ...mapSystemConfigToTokenRefreshConfig(config),
+            lastRunAt: config.tokenRefreshLastAutoCompletedAt,
+            nextRunAt: config.tokenRefreshNextRunAt,
+        };
+    },
+
+    async getRefreshStats(nextRunAtOverride: Date | null = null): Promise<RefreshStats> {
+        const config = await getSystemConfigSnapshot();
+        const lastResult = buildLastResult(config);
+        return {
+            lastRunAt: config.tokenRefreshLastAutoCompletedAt,
+            nextRunAt: nextRunAtOverride ?? config.tokenRefreshNextRunAt,
+            isRunning,
+            lastResult,
+            currentRun,
+            recentFailures: currentRun?.trigger === 'AUTO'
+                ? currentRun.recentFailures.slice().reverse()
+                : parseStoredFailures(config.tokenRefreshLastAutoFailures),
+        };
     },
 
     async updateTokenRefreshConfig(input: TokenRefreshConfig): Promise<TokenRefreshConfig> {
@@ -168,19 +279,40 @@ export const tokenRefreshService = {
                 tokenRefreshConcurrency: input.concurrency,
             },
             create: {
-                id: SYSTEM_CONFIG_ID,
+                ...defaultSystemConfigCreate,
                 tokenRefreshEnabled: input.enabled,
                 tokenRefreshIntervalHours: input.intervalHours,
                 tokenRefreshConcurrency: input.concurrency,
             },
-            select: {
-                tokenRefreshEnabled: true,
-                tokenRefreshIntervalHours: true,
-                tokenRefreshConcurrency: true,
-            },
+            select: systemConfigSelect,
         });
 
         return mapSystemConfigToTokenRefreshConfig(config);
+    },
+
+    async updateNextAutoRunAt(nextRunAt: Date | null): Promise<void> {
+        await prisma.systemConfig.upsert({
+            where: { id: SYSTEM_CONFIG_ID },
+            update: {
+                tokenRefreshNextRunAt: nextRunAt,
+            },
+            create: {
+                ...defaultSystemConfigCreate,
+                tokenRefreshNextRunAt: nextRunAt,
+            },
+        });
+    },
+
+    isRefreshRunning(): boolean {
+        return isRunning;
+    },
+
+    isAutoRunInProgress(): boolean {
+        return currentRun?.trigger === 'AUTO';
+    },
+
+    getCurrentRun(): CurrentRefreshRun | null {
+        return currentRun;
     },
 
     /**
@@ -265,7 +397,6 @@ export const tokenRefreshService = {
                 return { emailId, email: account.email, success: false, message: msg };
             }
 
-            // 成功：加密新 token 并保存
             const encryptedNewToken = encrypt(data.refresh_token);
             await prisma.emailAccount.update({
                 where: { id: emailId },
@@ -292,26 +423,37 @@ export const tokenRefreshService = {
     /**
      * 批量刷新所有未禁用邮箱
      */
-    async refreshAll(options?: { concurrency?: number; groupId?: number }): Promise<BatchRefreshResult> {
+    async refreshAll(options?: RefreshAllOptions): Promise<BatchRefreshResult> {
+        const trigger = options?.trigger ?? 'MANUAL';
+        const groupId = options?.groupId ?? null;
+        const requestedById = options?.requestedBy?.id ?? null;
+        const requestedByUsername = options?.requestedBy?.username ?? null;
+
         if (isRunning) {
             return {
+                trigger,
+                groupId,
+                requestedById,
+                requestedByUsername,
                 total: 0,
                 success: 0,
                 failed: 0,
-                results: [],
                 durationMs: 0,
+                startedAt: new Date(),
+                completedAt: new Date(),
+                results: [],
             };
         }
 
         isRunning = true;
-        const startTime = Date.now();
+        const startedAt = new Date();
 
         try {
             const where: Prisma.EmailAccountWhereInput = {
                 status: { not: 'DISABLED' },
             };
-            if (options?.groupId) {
-                where.groupId = options.groupId;
+            if (groupId) {
+                where.groupId = groupId;
             }
 
             const accounts = await prisma.emailAccount.findMany({
@@ -324,72 +466,117 @@ export const tokenRefreshService = {
             const concurrency = options?.concurrency || config.concurrency;
             const results: RefreshResult[] = [];
             currentRun = {
+                trigger,
+                groupId,
+                requestedById,
+                requestedByUsername,
                 total: accounts.length,
                 completed: 0,
                 success: 0,
                 failed: 0,
-                startedAt: new Date(),
+                startedAt,
+                completedAt: null,
                 durationMs: 0,
                 recentFailures: [],
             };
 
             logger.info({
+                trigger,
+                groupId,
+                requestedById,
+                requestedByUsername,
                 total: accounts.length,
                 concurrency,
-                groupId: options?.groupId,
-            }, 'Starting batch token refresh');
+            }, 'Token refresh run started');
 
             await runWithConcurrency(accounts, concurrency, async (account) => {
                 const result = await this.refreshSingleToken(account.id);
                 results.push(result);
-                if (currentRun) {
-                    currentRun.completed += 1;
-                    currentRun.durationMs = Date.now() - startTime;
-                    if (result.success) {
-                        currentRun.success += 1;
-                    } else {
-                        currentRun.failed += 1;
-                        appendRecentFailure(currentRun.recentFailures, result);
-                    }
+                if (!currentRun) {
+                    return;
+                }
+
+                currentRun.completed += 1;
+                currentRun.durationMs = Date.now() - startedAt.getTime();
+                if (result.success) {
+                    currentRun.success += 1;
+                } else {
+                    currentRun.failed += 1;
+                    appendRecentFailure(currentRun.recentFailures, result);
                 }
             });
 
+            const completedAt = new Date();
             const batchResult: BatchRefreshResult = {
+                trigger,
+                groupId,
+                requestedById,
+                requestedByUsername,
                 total: accounts.length,
-                success: results.filter(r => r.success).length,
-                failed: results.filter(r => !r.success).length,
+                success: results.filter((item) => item.success).length,
+                failed: results.filter((item) => !item.success).length,
+                durationMs: completedAt.getTime() - startedAt.getTime(),
+                startedAt,
+                completedAt,
                 results,
-                durationMs: Date.now() - startTime,
             };
 
-            lastResult = batchResult;
-            lastRunAt = new Date();
+            if (currentRun) {
+                currentRun.completedAt = completedAt;
+                currentRun.durationMs = batchResult.durationMs;
+            }
+
+            if (trigger === 'AUTO') {
+                await prisma.systemConfig.upsert({
+                    where: { id: SYSTEM_CONFIG_ID },
+                    update: {
+                        tokenRefreshLastAutoCompletedAt: completedAt,
+                        tokenRefreshLastAutoTotal: batchResult.total,
+                        tokenRefreshLastAutoSuccess: batchResult.success,
+                        tokenRefreshLastAutoFailed: batchResult.failed,
+                        tokenRefreshLastAutoDurationMs: batchResult.durationMs,
+                        tokenRefreshLastAutoFailures: serializeFailures(
+                            results.filter((item) => !item.success).slice(-RECENT_FAILURE_LIMIT)
+                        ),
+                    },
+                    create: {
+                        ...defaultSystemConfigCreate,
+                        tokenRefreshLastAutoCompletedAt: completedAt,
+                        tokenRefreshLastAutoTotal: batchResult.total,
+                        tokenRefreshLastAutoSuccess: batchResult.success,
+                        tokenRefreshLastAutoFailed: batchResult.failed,
+                        tokenRefreshLastAutoDurationMs: batchResult.durationMs,
+                        tokenRefreshLastAutoFailures: serializeFailures(
+                            results.filter((item) => !item.success).slice(-RECENT_FAILURE_LIMIT)
+                        ),
+                    },
+                });
+            }
 
             logger.info({
+                trigger,
+                groupId,
+                requestedById,
+                requestedByUsername,
                 total: batchResult.total,
                 success: batchResult.success,
                 failed: batchResult.failed,
                 durationMs: batchResult.durationMs,
-            }, 'Batch token refresh completed');
+            }, 'Token refresh run completed');
 
             return batchResult;
+        } catch (err) {
+            logger.error({
+                err,
+                trigger,
+                groupId,
+                requestedById,
+                requestedByUsername,
+            }, 'Token refresh run failed');
+            throw err;
         } finally {
             isRunning = false;
             currentRun = null;
         }
-    },
-
-    /**
-     * 获取刷新状态
-     */
-    getRefreshStats(nextRunAt: Date | null = null): RefreshStats {
-        return {
-            lastRunAt,
-            nextRunAt,
-            isRunning,
-            lastResult,
-            currentRun,
-            recentFailures: currentRun?.recentFailures.slice().reverse() || getRecentFailuresFromBatchResult(lastResult),
-        };
     },
 };

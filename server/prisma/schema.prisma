@@ -105,6 +105,13 @@ model SystemConfig {
   tokenRefreshEnabled       Boolean  @default(true) @map("token_refresh_enabled")
   tokenRefreshIntervalHours Int      @default(12) @map("token_refresh_interval_hours")
   tokenRefreshConcurrency   Int      @default(10) @map("token_refresh_concurrency")
+  tokenRefreshNextRunAt     DateTime? @map("token_refresh_next_run_at")
+  tokenRefreshLastAutoCompletedAt DateTime? @map("token_refresh_last_auto_completed_at")
+  tokenRefreshLastAutoTotal Int?     @map("token_refresh_last_auto_total")
+  tokenRefreshLastAutoSuccess Int?   @map("token_refresh_last_auto_success")
+  tokenRefreshLastAutoFailed Int?    @map("token_refresh_last_auto_failed")
+  tokenRefreshLastAutoDurationMs Int? @map("token_refresh_last_auto_duration_ms")
+  tokenRefreshLastAutoFailures Json? @map("token_refresh_last_auto_failures")
   createdAt                 DateTime @default(now()) @map("created_at")
   updatedAt                 DateTime @updatedAt @map("updated_at")
 
