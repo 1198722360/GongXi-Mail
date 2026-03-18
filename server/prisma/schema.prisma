@@ -37,6 +37,7 @@ model ApiKey {
   id          Int       @id @default(autoincrement())
   name        String    @db.VarChar(100)
   keyHash     String    @unique @map("key_hash") @db.VarChar(64)
+  keyEncrypted String?  @map("key_encrypted") @db.Text
   keyPrefix   String    @map("key_prefix") @db.VarChar(8)
   permissions Json?
   allowedGroupIds Json? @map("allowed_group_ids")

@@ -312,7 +312,7 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
       <Card title="认证方式" style={{ marginBottom: 24 }}>
         <Alert
           message="所有 API 请求都需要携带有效的 API Key"
-          description="请在「API Key」页面创建密钥，密钥只在创建时显示一次，请妥善保存。"
+          description="请在「API Key」页面创建密钥，创建后可在列表中持续查看并复制。"
           type="info"
           showIcon
           style={{ marginBottom: 16 }}

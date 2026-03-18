@@ -34,6 +34,7 @@ import {
     DatabaseOutlined,
     ThunderboltOutlined,
     SearchOutlined,
+    CopyOutlined,
 } from '@ant-design/icons';
 import { apiKeyApi, groupApi, emailApi } from '../../api';
 import { getErrorMessage } from '../../utils/error';
@@ -53,6 +54,7 @@ interface EmailGroup {
 interface ApiKey {
     id: number;
     name: string;
+    key: string | null;
     keyPrefix: string;
     rateLimit: number;
     status: 'ACTIVE' | 'DISABLED';
@@ -143,6 +145,48 @@ const ApiKeysPage: React.FC = () => {
         (emails: PoolEmailItem[]) => emails.filter((item) => item.used).map((item) => item.id),
         []
     );
+
+    const fallbackCopyText = useCallback((text: string): boolean => {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+
+        let copied = false;
+        try {
+            copied = document.execCommand('copy');
+        } finally {
+            document.body.removeChild(textarea);
+        }
+
+        return copied;
+    }, []);
+
+    const handleCopyKey = useCallback(async (key: string | null) => {
+        if (!key) {
+            message.warning('该 API Key 为历史密钥，明文不可恢复，请重新创建新的密钥');
+            return;
+        }
+
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(key);
+            } else if (!fallbackCopyText(key)) {
+                throw new Error('copy_failed');
+            }
+
+            message.success('API Key 已复制');
+        } catch {
+            if (fallbackCopyText(key)) {
+                message.success('API Key 已复制');
+                return;
+            }
+            message.error('复制失败，请手动复制');
+        }
+    }, [fallbackCopyText]);
 
     const fetchGroups = useCallback(async () => {
         const result = await requestData<EmailGroup[]>(
@@ -303,10 +347,14 @@ const ApiKeysPage: React.FC = () => {
                 };
                 const res = await apiKeyApi.create(submitData);
                 if (res.code === 200) {
-                    setModalVisible(false);
                     setNewKey(res.data.key);
-                    setNewKeyModalVisible(true);
-                    fetchData();
+                    setModalVisible(false);
+                    message.success('API Key 创建成功，可在列表中直接查看和复制');
+                    if (page !== 1) {
+                        setPage(1);
+                    } else {
+                        await fetchData();
+                    }
                 } else {
                     message.error(res.message);
                 }
@@ -445,11 +493,30 @@ const ApiKeysPage: React.FC = () => {
             ),
         },
         {
-            title: 'Key 前缀',
-            dataIndex: 'keyPrefix',
-            key: 'keyPrefix',
-            width: 120,
-            render: (text) => <Text code>{text}...</Text>,
+            title: 'API Key',
+            dataIndex: 'key',
+            key: 'key',
+            width: 360,
+            render: (value, record) => value ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <Input
+                        value={value}
+                        readOnly
+                        style={{ flex: 1, minWidth: 0, fontFamily: 'monospace' }}
+                    />
+                    <Button
+                        icon={<CopyOutlined />}
+                        onClick={() => void handleCopyKey(value)}
+                    >
+                        复制
+                    </Button>
+                </div>
+            ) : (
+                <Space direction="vertical" size={4}>
+                    <Text code>{record.keyPrefix}...</Text>
+                    <Text type="secondary">历史密钥，明文不可恢复</Text>
+                </Space>
+            ),
         },
         {
             title: '速率限制',
@@ -536,7 +603,7 @@ const ApiKeysPage: React.FC = () => {
                 </Space>
             ),
         },
-    ], [handleDelete, handleEdit, handleManageEmails, handleViewPool]);
+    ], [handleCopyKey, handleDelete, handleEdit, handleManageEmails, handleViewPool]);
 
     const tablePagination = useMemo(
         () => ({
@@ -669,7 +736,7 @@ const ApiKeysPage: React.FC = () => {
                 loading={loading}
                 pagination={tablePagination}
                 virtual
-                scroll={{ y: 560, x: 1200 }}
+                scroll={{ y: 560, x: 1440 }}
             />
 
             {/* 创建/编辑弹窗 */}
@@ -856,7 +923,7 @@ const ApiKeysPage: React.FC = () => {
             >
                 <Card>
                     <Text type="warning" style={{ display: 'block', marginBottom: 16 }}>
-                        ⚠️ 请立即复制并妥善保存此 API Key，它不会再次显示！
+                        ⚠️ 此 API Key 可在列表中持续查看和复制，建议仍妥善保管。
                     </Text>
                     <Paragraph
                         copyable={{

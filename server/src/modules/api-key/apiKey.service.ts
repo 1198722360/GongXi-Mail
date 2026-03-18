@@ -1,5 +1,5 @@
 import prisma from '../../lib/prisma.js';
-import { generateApiKey } from '../../lib/crypto.js';
+import { decrypt, encrypt, generateApiKey } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
 import { parseApiPermissions } from '../../plugins/api-permissions.js';
 import { Prisma } from '@prisma/client';
@@ -35,6 +35,18 @@ function toNullableJsonIds(
     return value.length > 0 ? value : Prisma.DbNull;
 }
 
+function readStoredApiKey(value: string | null | undefined): string | null {
+    if (!value) {
+        return null;
+    }
+
+    try {
+        return decrypt(value);
+    } catch {
+        return null;
+    }
+}
+
 export const apiKeyService = {
     /**
      * 获取 API Key 列表
@@ -58,6 +70,7 @@ export const apiKeyService = {
                 select: {
                     id: true,
                     name: true,
+                    keyEncrypted: true,
                     keyPrefix: true,
                     rateLimit: true,
                     status: true,
@@ -77,11 +90,15 @@ export const apiKeyService = {
         ]);
 
         // 转换 BigInt
-        const formattedList = list.map((item: typeof list[number]) => ({
-            ...item,
-            usageCount: Number(item.usageCount),
-            createdByName: item.creator?.username,
-        }));
+        const formattedList = list.map((item: typeof list[number]) => {
+            const { creator, keyEncrypted, ...rest } = item;
+            return {
+                ...rest,
+                key: readStoredApiKey(keyEncrypted),
+                usageCount: Number(item.usageCount),
+                createdByName: creator?.username,
+            };
+        });
 
         return { list: formattedList, total, page, pageSize };
     },
@@ -116,6 +133,7 @@ export const apiKeyService = {
             data: {
                 name,
                 keyHash: hash,
+                keyEncrypted: encrypt(key),
                 keyPrefix: prefix,
                 rateLimit: rateLimit || 60,
                 expiresAt: expiresAt ? new Date(expiresAt) : null,
@@ -155,6 +173,7 @@ export const apiKeyService = {
             select: {
                 id: true,
                 name: true,
+                keyEncrypted: true,
                 keyPrefix: true,
                 rateLimit: true,
                 status: true,
@@ -176,12 +195,15 @@ export const apiKeyService = {
             throw new AppError('NOT_FOUND', 'API Key not found', 404);
         }
 
+        const { creator, keyEncrypted, ...rest } = apiKey;
+
         return {
-            ...apiKey,
+            ...rest,
+            key: readStoredApiKey(keyEncrypted),
             usageCount: Number(apiKey.usageCount),
             allowedGroupIds: parseJsonIdList(apiKey.allowedGroupIds),
             allowedEmailIds: parseJsonIdList(apiKey.allowedEmailIds),
-            createdByName: apiKey.creator?.username,
+            createdByName: creator?.username,
         };
     },
 
