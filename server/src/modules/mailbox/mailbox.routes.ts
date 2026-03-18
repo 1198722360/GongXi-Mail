@@ -2,7 +2,7 @@ import { type FastifyPluginAsync } from 'fastify';
 import { mailboxService, MAILBOX_SESSION_COOKIE_NAME, MAILBOX_SESSION_MAX_AGE_SECONDS } from './mailbox.service.js';
 import { mailboxLoginSchema, mailboxMessagesQuerySchema } from './mailbox.schema.js';
 
-function getMailboxSessionToken(request: { cookies?: Record<string, string> }): string | null {
+function getMailboxSessionToken(request: { cookies?: Record<string, string | undefined> }): string | null {
     const token = request.cookies?.[MAILBOX_SESSION_COOKIE_NAME];
     return typeof token === 'string' && token.trim() ? token : null;
 }

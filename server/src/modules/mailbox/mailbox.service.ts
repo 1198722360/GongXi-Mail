@@ -6,17 +6,49 @@ import { AppError } from '../../plugins/error.js';
 import { mailService } from '../mail/mail.service.js';
 import type { MailboxLoginInput } from './mailbox.schema.js';
 
-interface MailboxSession {
+export type MailboxFolder = 'INBOX' | 'JUNK';
+
+export interface MailboxSession {
     emailId: number;
     email: string;
     createdAt: string;
 }
 
-type MailFetchPayload = Awaited<ReturnType<typeof mailService.getEmails>>;
+export interface MailboxMessage {
+    id: string;
+    from: string;
+    subject: string;
+    text: string;
+    html: string;
+    date: string;
+}
+
+export interface MailboxFetchPayload {
+    email: string;
+    mailbox: MailboxFolder;
+    count: number;
+    messages: MailboxMessage[];
+    method: string;
+}
+
+export interface MailboxMessagesResult extends MailboxFetchPayload {
+    refreshedAt: string;
+    fromCache: boolean;
+    cooldownRemainingSeconds: number;
+}
+
+export interface MailboxCurrentUser {
+    email: string;
+}
+
+export interface MailboxLoginResult {
+    token: string;
+    email: string;
+}
 
 interface CachedMailboxFetch {
     fetchedAt: number;
-    payload: MailFetchPayload;
+    payload: MailboxFetchPayload;
 }
 
 const MAILBOX_SESSION_TTL_SECONDS = 60 * 60 * 12;
@@ -133,7 +165,7 @@ async function setCachedMailboxFetch(emailId: number, mailbox: string, value: Ca
     await setRedisJson(cacheKey, value, MAILBOX_REFRESH_CACHE_TTL_SECONDS);
 }
 
-function buildMailboxResponse(cached: CachedMailboxFetch, fromCache: boolean) {
+function buildMailboxResponse(cached: CachedMailboxFetch, fromCache: boolean): MailboxMessagesResult {
     const ageMs = Date.now() - cached.fetchedAt;
     const cooldownRemainingMs = Math.max(0, MAILBOX_REFRESH_COOLDOWN_MS - ageMs);
 
@@ -171,7 +203,7 @@ async function getCurrentMailboxAccount(emailId: number) {
 }
 
 export const mailboxService = {
-    async login(input: MailboxLoginInput) {
+    async login(input: MailboxLoginInput): Promise<MailboxLoginResult> {
         const normalizedEmail = input.email.trim().toLowerCase();
         const account = await prisma.emailAccount.findFirst({
             where: {
@@ -238,14 +270,14 @@ export const mailboxService = {
         await deleteStoredSession(token);
     },
 
-    async getCurrentUser(session: MailboxSession) {
+    async getCurrentUser(session: MailboxSession): Promise<MailboxCurrentUser> {
         const account = await getCurrentMailboxAccount(session.emailId);
         return {
             email: account.email,
         };
     },
 
-    async getMessages(session: MailboxSession, mailbox: 'INBOX' | 'JUNK') {
+    async getMessages(session: MailboxSession, mailbox: MailboxFolder): Promise<MailboxMessagesResult> {
         const account = await getCurrentMailboxAccount(session.emailId);
         const cached = await getCachedMailboxFetch(account.id, mailbox);
 
@@ -253,7 +285,7 @@ export const mailboxService = {
             return buildMailboxResponse(cached, true);
         }
 
-        const payload = await mailService.getEmails(
+        const rawPayload = await mailService.getEmails(
             {
                 id: account.id,
                 email: account.email,
@@ -267,6 +299,14 @@ export const mailboxService = {
                 limit: 100,
             }
         );
+
+        const payload: MailboxFetchPayload = {
+            email: rawPayload.email,
+            mailbox,
+            count: rawPayload.count,
+            messages: rawPayload.messages as MailboxMessage[],
+            method: rawPayload.method,
+        };
 
         const nextCache: CachedMailboxFetch = {
             fetchedAt: Date.now(),
