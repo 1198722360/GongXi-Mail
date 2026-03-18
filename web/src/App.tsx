@@ -7,6 +7,8 @@ import { isSuperAdmin } from './utils/auth';
 
 // Pages (lazy loaded)
 const LoginPage = lazy(() => import('./pages/login'));
+const MailLoginPage = lazy(() => import('./pages/mail-login'));
+const MailboxPage = lazy(() => import('./pages/mailbox'));
 const MainLayout = lazy(() => import('./layouts/MainLayout'));
 const DashboardPage = lazy(() => import('./pages/dashboard'));
 const EmailsPage = lazy(() => import('./pages/emails'));
@@ -72,6 +74,8 @@ const App: React.FC = () => {
           <Routes>
             {/* 登录页 */}
             <Route path="/login" element={withSuspense(<LoginPage />)} />
+            <Route path="/mail-login" element={withSuspense(<MailLoginPage />)} />
+            <Route path="/mailbox" element={withSuspense(<MailboxPage />)} />
 
             {/* 需要认证的页面 */}
             <Route

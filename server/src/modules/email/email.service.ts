@@ -356,14 +356,16 @@ export const emailService = {
             where,
             select: {
                 email: true,
+                password: true,
                 clientId: true,
                 refreshToken: true,
             },
         });
 
-        const lines = accounts.map((acc: { email: string; clientId: string; refreshToken: string }) => {
+        const lines = accounts.map((acc: { email: string; password: string | null; clientId: string; refreshToken: string }) => {
+            const password = acc.password ? decrypt(acc.password) : '';
             const token = decrypt(acc.refreshToken);
-            return `${acc.email}${separator}${acc.clientId}${separator}${token}`;
+            return `${acc.email}${separator}${password}${separator}${acc.clientId}${separator}${token}`;
         });
 
         return lines.join('\n');

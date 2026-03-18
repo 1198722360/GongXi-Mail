@@ -154,7 +154,12 @@ const shouldClearAuthOnUnauthorized = (
 
     const code = String(payload?.error?.code || '').toUpperCase();
     const normalizedUrl = String(requestUrl || '');
+    const isAdminRequest = normalizedUrl.includes('/admin/');
     const tokenInvalidCodes = new Set(['UNAUTHORIZED', 'INVALID_TOKEN', 'TOKEN_EXPIRED', 'JWT_EXPIRED']);
+
+    if (!isAdminRequest) {
+        return false;
+    }
 
     if (tokenInvalidCodes.has(code)) {
         return true;
@@ -571,6 +576,53 @@ export const emailApi = {
 // ========================================
 // 邮箱分组 API
 // ========================================
+
+export const mailboxApi = {
+    login: (email: string, password: string) =>
+        requestPost<{ email: string }, { email: string; password: string }>(
+            '/mailbox-api/login',
+            { email, password },
+            { withCredentials: true }
+        ),
+
+    logout: () =>
+        requestPost<{ success: boolean }>(
+            '/mailbox-api/logout',
+            undefined,
+            { withCredentials: true }
+        ),
+
+    me: () =>
+        requestGet<{ email: string }>(
+            '/mailbox-api/me',
+            { withCredentials: true }
+        ),
+
+    getMessages: (mailbox: 'INBOX' | 'JUNK' = 'INBOX') =>
+        requestGet<{
+            email: string;
+            mailbox: 'INBOX' | 'JUNK';
+            count: number;
+            messages: Array<{
+                id: string;
+                from: string;
+                subject: string;
+                text: string;
+                html: string;
+                date: string;
+            }>;
+            method: string;
+            refreshedAt: string;
+            fromCache: boolean;
+            cooldownRemainingSeconds: number;
+        }>(
+            '/mailbox-api/messages',
+            {
+                params: { mailbox },
+                withCredentials: true,
+            }
+        ),
+};
 
 export const groupApi = {
     getList: <T = Record<string, unknown>>() =>
