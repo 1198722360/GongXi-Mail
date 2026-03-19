@@ -1,5 +1,6 @@
 export const MAIL_LOG_ACTIONS = {
     GET_EMAIL: 'get_email',
+    CONSUME_EMAILS: 'consume_emails',
     MAIL_NEW: 'mail_new',
     MAIL_TEXT: 'mail_text',
     MAIL_ALL: 'mail_all',

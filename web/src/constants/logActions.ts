@@ -1,5 +1,6 @@
 export const LOG_ACTIONS = {
     GET_EMAIL: 'get_email',
+    CONSUME_EMAILS: 'consume_emails',
     MAIL_NEW: 'mail_new',
     MAIL_TEXT: 'mail_text',
     MAIL_ALL: 'mail_all',
@@ -18,6 +19,7 @@ const LEGACY_ACTION_ALIASES: Record<string, LogAction> = {
 
 export const LOG_ACTION_LABELS: Record<LogAction, string> = {
     [LOG_ACTIONS.GET_EMAIL]: '分配邮箱',
+    [LOG_ACTIONS.CONSUME_EMAILS]: '批量消耗邮箱',
     [LOG_ACTIONS.MAIL_NEW]: '获取最新邮件',
     [LOG_ACTIONS.MAIL_TEXT]: '获取邮件文本',
     [LOG_ACTIONS.MAIL_ALL]: '获取所有邮件',
@@ -29,6 +31,7 @@ export const LOG_ACTION_LABELS: Record<LogAction, string> = {
 
 export const LOG_ACTION_COLORS: Record<LogAction, string> = {
     [LOG_ACTIONS.GET_EMAIL]: 'cyan',
+    [LOG_ACTIONS.CONSUME_EMAILS]: 'orange',
     [LOG_ACTIONS.MAIL_NEW]: 'processing',
     [LOG_ACTIONS.MAIL_TEXT]: 'geekblue',
     [LOG_ACTIONS.MAIL_ALL]: 'processing',
@@ -40,6 +43,7 @@ export const LOG_ACTION_COLORS: Record<LogAction, string> = {
 
 export const LOG_ACTION_OPTIONS: Array<{ value: LogAction; label: string }> = [
     { value: LOG_ACTIONS.GET_EMAIL, label: LOG_ACTION_LABELS[LOG_ACTIONS.GET_EMAIL] },
+    { value: LOG_ACTIONS.CONSUME_EMAILS, label: LOG_ACTION_LABELS[LOG_ACTIONS.CONSUME_EMAILS] },
     { value: LOG_ACTIONS.MAIL_NEW, label: LOG_ACTION_LABELS[LOG_ACTIONS.MAIL_NEW] },
     { value: LOG_ACTIONS.MAIL_TEXT, label: LOG_ACTION_LABELS[LOG_ACTIONS.MAIL_TEXT] },
     { value: LOG_ACTIONS.MAIL_ALL, label: LOG_ACTION_LABELS[LOG_ACTIONS.MAIL_ALL] },
