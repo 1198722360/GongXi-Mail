@@ -35,6 +35,7 @@ import {
     ThunderboltOutlined,
     SearchOutlined,
     CopyOutlined,
+    CheckOutlined,
 } from '@ant-design/icons';
 import { apiKeyApi, groupApi, emailApi } from '../../api';
 import { getErrorMessage } from '../../utils/error';
@@ -145,48 +146,6 @@ const ApiKeysPage: React.FC = () => {
         (emails: PoolEmailItem[]) => emails.filter((item) => item.used).map((item) => item.id),
         []
     );
-
-    const fallbackCopyText = useCallback((text: string): boolean => {
-        const textarea = document.createElement('textarea');
-        textarea.value = text;
-        textarea.setAttribute('readonly', 'true');
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-
-        let copied = false;
-        try {
-            copied = document.execCommand('copy');
-        } finally {
-            document.body.removeChild(textarea);
-        }
-
-        return copied;
-    }, []);
-
-    const handleCopyKey = useCallback(async (key: string | null) => {
-        if (!key) {
-            message.warning('该 API Key 为历史密钥，明文不可恢复，请重新创建新的密钥');
-            return;
-        }
-
-        try {
-            if (navigator.clipboard?.writeText) {
-                await navigator.clipboard.writeText(key);
-            } else if (!fallbackCopyText(key)) {
-                throw new Error('copy_failed');
-            }
-
-            message.success('API Key 已复制');
-        } catch {
-            if (fallbackCopyText(key)) {
-                message.success('API Key 已复制');
-                return;
-            }
-            message.error('复制失败，请手动复制');
-        }
-    }, [fallbackCopyText]);
 
     const fetchGroups = useCallback(async () => {
         const result = await requestData<EmailGroup[]>(
@@ -504,12 +463,54 @@ const ApiKeysPage: React.FC = () => {
                         readOnly
                         style={{ flex: 1, minWidth: 0, fontFamily: 'monospace' }}
                     />
-                    <Button
-                        icon={<CopyOutlined />}
-                        onClick={() => void handleCopyKey(value)}
-                    >
-                        复制
-                    </Button>
+                    <Text
+                        copyable={{
+                            text: value,
+                            tooltips: ['复制', '已复制'],
+                            onCopy: () => message.success('API Key 已复制'),
+                            icon: [
+                                (
+                                    <span
+                                        key="copy"
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 6,
+                                            padding: '4px 12px',
+                                            border: '1px solid #d9d9d9',
+                                            borderRadius: 6,
+                                            background: '#fff',
+                                            color: 'rgba(0, 0, 0, 0.88)',
+                                            lineHeight: 1.5715,
+                                        }}
+                                    >
+                                        <CopyOutlined />
+                                        <span>复制</span>
+                                    </span>
+                                ),
+                                (
+                                    <span
+                                        key="copied"
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 6,
+                                            padding: '4px 12px',
+                                            border: '1px solid #91caff',
+                                            borderRadius: 6,
+                                            background: '#e6f4ff',
+                                            color: '#1677ff',
+                                            lineHeight: 1.5715,
+                                        }}
+                                    >
+                                        <CheckOutlined />
+                                        <span>已复制</span>
+                                    </span>
+                                ),
+                            ],
+                        }}
+                        style={{ flexShrink: 0 }}
+                    />
                 </div>
             ) : (
                 <Space direction="vertical" size={4}>
@@ -603,7 +604,7 @@ const ApiKeysPage: React.FC = () => {
                 </Space>
             ),
         },
-    ], [handleCopyKey, handleDelete, handleEdit, handleManageEmails, handleViewPool]);
+    ], [handleDelete, handleEdit, handleManageEmails, handleViewPool]);
 
     const tablePagination = useMemo(
         () => ({
