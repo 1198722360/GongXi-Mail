@@ -128,6 +128,7 @@ export const poolService = {
             select: {
                 id: true,
                 email: true,
+                password: true,
                 clientId: true,
                 refreshToken: true,
                 groupId: true,
@@ -146,6 +147,7 @@ export const poolService = {
 
         return {
             ...email,
+            password: email.password ? decrypt(email.password) : null,
             refreshToken: decrypt(email.refreshToken),
             fetchStrategy: email.group?.fetchStrategy || 'GRAPH_FIRST',
         };

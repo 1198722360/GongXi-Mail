@@ -52,7 +52,7 @@ const ApiDocsPage: React.FC = () => {
       name: '获取邮箱地址',
       method: 'GET/POST',
       path: '/api/get-email',
-      description: '从邮箱池中分配一个未使用的邮箱地址。可通过 group 参数限制仅从指定分组中分配。',
+      description: '从邮箱池中分配一个未使用的邮箱地址，并返回该邮箱的密码。可通过 group 参数限制仅从指定分组中分配。',
       params: [
         { name: 'group', type: 'string', required: false, desc: '分组名称，仅从该分组中分配' },
       ],
@@ -62,7 +62,8 @@ const ApiDocsPage: React.FC = () => {
   "success": true,
   "data": {
     "email": "example@outlook.com",
-    "id": 1
+    "id": 1,
+    "password": "your_mail_password"
   }
 }`,
       errorResponse: `{
@@ -299,7 +300,7 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
             <p style={{ marginBottom: 8 }}>系统提供灵活的邮箱访问方式：</p>
             <ul style={{ marginBottom: 8, paddingLeft: 20 }}>
               <li><strong>直接访问</strong>：如果您已知目标邮箱地址，可直接调用 <code>/api/mail_new</code> 或 <code>/api/mail_all</code> 获取邮件，无需任何前置分配操作。</li>
-              <li><strong>自动分配</strong>：如果你需要一个新的、未使用的邮箱，请调用 <code>/api/get-email</code>。这将返回一个随机邮箱并标记为您已使用，避免重复。</li>
+              <li><strong>自动分配</strong>：如果你需要一个新的、未使用的邮箱，请调用 <code>/api/get-email</code>。这将返回一个随机邮箱及其密码，并标记为您已使用，避免重复。</li>
               <li><strong>文本提速</strong>：对于自动化脚本，推荐使用 <code>/api/mail_text</code> 配合正则匹配，直接获取验证码等核心信息。</li>
             </ul>
           </div>

@@ -98,6 +98,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                         data: {
                             email: email.email,
                             id: email.id,
+                            password: email.password,
                         },
                     };
                 } catch (err: unknown) {
