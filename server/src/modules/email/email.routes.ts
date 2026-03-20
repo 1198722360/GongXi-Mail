@@ -1,5 +1,6 @@
 import { type FastifyPluginAsync } from 'fastify';
 import { emailService } from './email.service.js';
+import { emailImportQueueService } from './email-import-queue.service.js';
 import { mailService } from '../mail/mail.service.js';
 import { tokenRefreshService } from './token-refresh.service.js';
 import { createEmailSchema, updateEmailSchema, listEmailSchema, importEmailSchema } from './email.schema.js';
@@ -90,18 +91,30 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
     // 批量导入
     fastify.post('/import', async (request) => {
         const input = importEmailSchema.parse(request.body);
-        const result = await emailService.import(input);
+        const job = await emailImportQueueService.enqueue(
+            input,
+            request.user ? {
+                id: request.user.id,
+                username: request.user.username,
+            } : null
+        );
         request.log.info({
             systemEvent: true,
-            action: 'email.import',
+            action: 'email.import_enqueue',
             actorId: request.user?.id ?? null,
             actorUsername: request.user?.username ?? null,
+            jobId: job.id,
+            total: job.total,
             separator: input.separator,
-            success: result.success,
-            failed: result.failed,
-            errorCount: result.errors.length,
-        }, '批量导入邮箱');
-        return { success: true, data: result };
+            groupId: input.groupId ?? null,
+            positionInQueue: job.positionInQueue,
+        }, '批量导入邮箱任务已加入队列');
+        return { success: true, data: job };
+    });
+
+    fastify.get('/import-jobs', async () => {
+        const status = emailImportQueueService.getStatus();
+        return { success: true, data: status };
     });
 
     // 导出

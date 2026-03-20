@@ -487,13 +487,70 @@ export const emailApi = {
         ),
 
     import: (content: string, separator?: string, groupId?: number) =>
-        requestPost<Record<string, unknown>, { content: string; separator?: string; groupId?: number }>(
+        requestPost<{
+            id: string;
+            status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+            total: number;
+            completed: number;
+            success: number;
+            failed: number;
+            separator: string;
+            groupId: number | null;
+            createdAt: string;
+            startedAt: string | null;
+            completedAt: string | null;
+            durationMs: number;
+            createdById: number | null;
+            createdByUsername: string | null;
+            recentErrors: string[];
+            positionInQueue: number | null;
+        }, { content: string; separator?: string; groupId?: number }>(
             '/admin/emails/import',
             { content, separator, groupId },
-            {
-                invalidatePrefixes: ['/admin/emails', '/admin/email-groups', '/admin/api-keys', '/admin/dashboard/stats'],
-            }
+            { timeout: 180000 }
         ),
+
+    getImportJobs: () =>
+        requestGet<{
+            isRunning: boolean;
+            pendingCount: number;
+            currentJob: {
+                id: string;
+                status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+                total: number;
+                completed: number;
+                success: number;
+                failed: number;
+                separator: string;
+                groupId: number | null;
+                createdAt: string;
+                startedAt: string | null;
+                completedAt: string | null;
+                durationMs: number;
+                createdById: number | null;
+                createdByUsername: string | null;
+                recentErrors: string[];
+                positionInQueue: number | null;
+            } | null;
+            jobs: Array<{
+                id: string;
+                status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+                total: number;
+                completed: number;
+                success: number;
+                failed: number;
+                separator: string;
+                groupId: number | null;
+                createdAt: string;
+                startedAt: string | null;
+                completedAt: string | null;
+                durationMs: number;
+                createdById: number | null;
+                createdByUsername: string | null;
+                recentErrors: string[];
+                positionInQueue: number | null;
+            }>;
+        }>('/admin/emails/import-jobs'),
 
     export: (ids?: number[], separator?: string, groupId?: number) =>
         requestGet<{ content: string }>('/admin/emails/export', {

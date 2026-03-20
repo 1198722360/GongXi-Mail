@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     Table,
     Button,
+    Card,
     Space,
     Modal,
     Form,
@@ -16,6 +17,7 @@ import {
     List,
     Tabs,
     Spin,
+    Progress,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -95,6 +97,32 @@ interface EmailDetailsResult extends EmailAccount {
     refreshToken: string;
 }
 
+interface EmailImportJob {
+    id: string;
+    status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+    total: number;
+    completed: number;
+    success: number;
+    failed: number;
+    separator: string;
+    groupId: number | null;
+    createdAt: string;
+    startedAt: string | null;
+    completedAt: string | null;
+    durationMs: number;
+    createdById: number | null;
+    createdByUsername: string | null;
+    recentErrors: string[];
+    positionInQueue: number | null;
+}
+
+interface EmailImportQueueStatus {
+    isRunning: boolean;
+    pendingCount: number;
+    currentJob: EmailImportJob | null;
+    jobs: EmailImportJob[];
+}
+
 const EmailsPage: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState<EmailAccount[]>([]);
@@ -112,6 +140,8 @@ const EmailsPage: React.FC = () => {
     const [importContent, setImportContent] = useState('');
     const [separator, setSeparator] = useState('----');
     const [importGroupId, setImportGroupId] = useState<number | undefined>(undefined);
+    const [importSubmitting, setImportSubmitting] = useState(false);
+    const [importQueueStatus, setImportQueueStatus] = useState<EmailImportQueueStatus | null>(null);
     const [mailList, setMailList] = useState<MailItem[]>([]);
     const [mailLoading, setMailLoading] = useState(false);
     const [currentEmail, setCurrentEmail] = useState<string>('');
@@ -133,6 +163,7 @@ const EmailsPage: React.FC = () => {
     const [refreshingTokenIds, setRefreshingTokenIds] = useState<Set<number>>(new Set());
     const [batchRefreshing, setBatchRefreshing] = useState(false);
     const latestListRequestIdRef = useRef(0);
+    const importJobStatusRef = useRef<Record<string, EmailImportJob['status']>>({});
 
     const toOptionalNumber = (value: unknown): number | undefined => {
         if (value === undefined || value === null || value === '') {
@@ -173,6 +204,43 @@ const EmailsPage: React.FC = () => {
         setLoading(false);
     }, [debouncedKeyword, filterGroupId, page, pageSize]);
 
+    const loadImportJobs = useCallback(async (silent = false) => {
+        const result = await requestData<EmailImportQueueStatus>(
+            () => emailApi.getImportJobs(),
+            '获取导入任务状态失败',
+            { silent }
+        );
+
+        if (!result) {
+            return null;
+        }
+
+        const previousStatuses = importJobStatusRef.current;
+        let shouldRefreshList = false;
+        const nextStatuses: Record<string, EmailImportJob['status']> = {};
+
+        for (const job of result.jobs) {
+            nextStatuses[job.id] = job.status;
+            if (
+                (job.status === 'COMPLETED' || job.status === 'FAILED') &&
+                previousStatuses[job.id] &&
+                previousStatuses[job.id] !== job.status
+            ) {
+                shouldRefreshList = true;
+            }
+        }
+
+        importJobStatusRef.current = nextStatuses;
+        setImportQueueStatus(result);
+
+        if (shouldRefreshList) {
+            void fetchData();
+            void fetchGroups();
+        }
+
+        return result;
+    }, [fetchData, fetchGroups]);
+
     useEffect(() => {
         const timer = window.setTimeout(() => {
             void fetchGroups();
@@ -193,6 +261,28 @@ const EmailsPage: React.FC = () => {
         }, 0);
         return () => window.clearTimeout(timer);
     }, [fetchData]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            void loadImportJobs(true);
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [loadImportJobs]);
+
+    useEffect(() => {
+        const hasActiveJobs = importQueueStatus?.jobs.some(
+            (job) => job.status === 'QUEUED' || job.status === 'RUNNING'
+        );
+        if (!hasActiveJobs) {
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            void loadImportJobs(true);
+        }, 3000);
+
+        return () => window.clearInterval(timer);
+    }, [importQueueStatus, loadImportJobs]);
 
     const handleCreate = () => {
         setEditingId(null);
@@ -308,23 +398,28 @@ const EmailsPage: React.FC = () => {
         }
 
         try {
-            const res = await emailApi.import(
-                importContent,
-                separator,
-                toOptionalNumber(importGroupId)
+            setImportSubmitting(true);
+            const result = await requestData<EmailImportJob>(
+                () => emailApi.import(
+                    importContent,
+                    separator,
+                    toOptionalNumber(importGroupId)
+                ),
+                '加入导入队列失败'
             );
-            if (res.code === 200) {
-                message.success(res.message);
-                setImportModalVisible(false);
+
+            if (result) {
+                const queueMessage = result.positionInQueue && result.positionInQueue > 0
+                    ? `已加入导入队列，共 ${result.total} 条，当前排队第 ${result.positionInQueue} 个，可在列表上方查看进度`
+                    : `已加入导入队列，共 ${result.total} 条，可在列表上方查看进度`;
+                message.success(queueMessage);
                 setImportContent('');
-                setImportGroupId(undefined);
-                fetchData();
-                fetchGroups();
-            } else {
-                message.error(res.message);
+                await loadImportJobs(true);
             }
         } catch (err: unknown) {
             message.error(getErrorMessage(err, '导入失败'));
+        } finally {
+            setImportSubmitting(false);
         }
     };
 
@@ -726,6 +821,45 @@ const EmailsPage: React.FC = () => {
         [groups]
     );
 
+    const groupNameMap = useMemo(
+        () => Object.fromEntries(groups.map((group: EmailGroup) => [group.id, group.name])),
+        [groups]
+    );
+
+    const importJobs = importQueueStatus?.jobs || [];
+    const hasActiveImportJobs = importJobs.some(
+        (job) => job.status === 'QUEUED' || job.status === 'RUNNING'
+    );
+
+    const formatImportDuration = (durationMs: number) => {
+        if (!durationMs || durationMs <= 0) {
+            return '0 秒';
+        }
+
+        const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+
+        if (minutes === 0) {
+            return `${totalSeconds} 秒`;
+        }
+
+        return `${minutes} 分 ${seconds} 秒`;
+    };
+
+    const getImportJobStatusTag = (status: EmailImportJob['status']) => {
+        if (status === 'RUNNING') {
+            return <Tag color="processing">进行中</Tag>;
+        }
+        if (status === 'QUEUED') {
+            return <Tag color="default">排队中</Tag>;
+        }
+        if (status === 'COMPLETED') {
+            return <Tag color="success">已完成</Tag>;
+        }
+        return <Tag color="error">已失败</Tag>;
+    };
+
     // ========================================
     // Group table columns
     // ========================================
@@ -800,6 +934,87 @@ const EmailsPage: React.FC = () => {
                         label: '邮箱列表',
                         children: (
                             <>
+                                {importJobs.length > 0 && (
+                                    <Card
+                                        size="small"
+                                        title="导入队列"
+                                        style={{ marginBottom: 16 }}
+                                        extra={
+                                            <Space size="small">
+                                                {hasActiveImportJobs ? <Tag color="processing">队列运行中</Tag> : <Tag>队列空闲</Tag>}
+                                                <Text type="secondary">排队 {importQueueStatus?.pendingCount || 0}</Text>
+                                            </Space>
+                                        }
+                                    >
+                                        <List
+                                            dataSource={importJobs.slice(0, 6)}
+                                            renderItem={(job: EmailImportJob) => {
+                                                const progressPercent = job.total > 0
+                                                    ? Math.min(100, Math.round((job.completed / job.total) * 100))
+                                                    : 0;
+                                                const queueText = job.status === 'QUEUED'
+                                                    ? `队列第 ${job.positionInQueue || 1} 个`
+                                                    : job.status === 'RUNNING'
+                                                        ? `已处理 ${job.completed}/${job.total}`
+                                                        : job.completedAt
+                                                            ? `完成于 ${dayjs(job.completedAt).format('YYYY-MM-DD HH:mm:ss')}`
+                                                            : `创建于 ${dayjs(job.createdAt).format('YYYY-MM-DD HH:mm:ss')}`;
+                                                const groupLabel = job.groupId
+                                                    ? (groupNameMap[job.groupId] || `分组 #${job.groupId}`)
+                                                    : '未指定分组';
+                                                const latestError = job.recentErrors[job.recentErrors.length - 1];
+
+                                                return (
+                                                    <List.Item>
+                                                        <div style={{ width: '100%' }}>
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                                                                <Space wrap size={[8, 8]}>
+                                                                    <Text strong>任务 {job.id.slice(0, 8)}</Text>
+                                                                    {getImportJobStatusTag(job.status)}
+                                                                    <Text type="secondary">共 {job.total} 条</Text>
+                                                                    <Text type="secondary">{groupLabel}</Text>
+                                                                    {job.createdByUsername ? (
+                                                                        <Text type="secondary">提交人 {job.createdByUsername}</Text>
+                                                                    ) : null}
+                                                                </Space>
+                                                                <Text type="secondary">{queueText}</Text>
+                                                            </div>
+                                                            <Progress
+                                                                percent={progressPercent}
+                                                                showInfo={false}
+                                                                status={
+                                                                    job.status === 'FAILED'
+                                                                        ? 'exception'
+                                                                        : job.status === 'COMPLETED'
+                                                                            ? 'success'
+                                                                            : 'active'
+                                                                }
+                                                                style={{ margin: '8px 0 4px' }}
+                                                            />
+                                                            <Space wrap size={[12, 4]}>
+                                                                <Text type="secondary">成功 {job.success}</Text>
+                                                                <Text type="secondary">失败 {job.failed}</Text>
+                                                                <Text type="secondary">耗时 {formatImportDuration(job.durationMs)}</Text>
+                                                                <Text type="secondary">创建于 {dayjs(job.createdAt).format('YYYY-MM-DD HH:mm:ss')}</Text>
+                                                            </Space>
+                                                            {latestError ? (
+                                                                <div style={{ marginTop: 6 }}>
+                                                                    <Text
+                                                                        type="danger"
+                                                                        ellipsis={{ tooltip: latestError }}
+                                                                        style={{ display: 'block' }}
+                                                                    >
+                                                                        {latestError}
+                                                                    </Text>
+                                                                </div>
+                                                            ) : null}
+                                                        </div>
+                                                    </List.Item>
+                                                );
+                                            }}
+                                        />
+                                    </Card>
+                                )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
                                     <Space wrap>
                                         <Input
@@ -944,15 +1159,19 @@ const EmailsPage: React.FC = () => {
                 open={importModalVisible}
                 onOk={handleImport}
                 onCancel={() => setImportModalVisible(false)}
+                okText="加入队列"
+                confirmLoading={importSubmitting}
                 destroyOnClose
                 width={700}
             >
                 <Space direction="vertical" style={{ width: '100%' }} size="middle">
                     <div>
                         <Text type="secondary">
-                            上传文件或粘贴内容。支持多种格式，将尝试自动解析。
+                            上传文件或粘贴内容。支持多种格式，将尝试自动解析，提交后会进入后端导入队列。
                             <br />
                             推荐格式：邮箱{separator}密码{separator}客户端ID{separator}刷新令牌
+                            <br />
+                            队列未完成时仍可继续提交新的批次，进度会显示在邮箱列表上方的导入队列面板。
                         </Text>
                     </div>
                     <Input
