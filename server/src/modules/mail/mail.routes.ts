@@ -20,10 +20,6 @@ const mailTextRequestSchema = z.object({
     match: z.string().optional(), // 正则表达式 (可选)
 });
 
-const consumeEmailsRequestSchema = z.object({
-    emails: z.array(z.string().email()).min(1).max(1000),
-});
-
 function getErrorStatusCode(err: unknown): number {
     if (!err || typeof err !== 'object') {
         return 500;
@@ -117,49 +113,6 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         } catch (err: unknown) {
             await mailService.logApiCall(
                 MAIL_LOG_ACTIONS.GET_EMAIL,
-                request.apiKey?.id,
-                undefined,
-                request.ip,
-                getErrorStatusCode(err),
-                Date.now() - startTime,
-                request.id
-            );
-            throw err;
-        }
-    });
-
-    fastify.post('/consume-emails', async (request) => {
-        const startTime = Date.now();
-        try {
-            if (!request.apiKey?.id) {
-                throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
-            }
-            fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.CONSUME_EMAILS);
-
-            const input = consumeEmailsRequestSchema.parse(request.body);
-            const result = await poolService.consumeEmails(request.apiKey.id, input.emails);
-
-            await mailService.logApiCall(
-                MAIL_LOG_ACTIONS.CONSUME_EMAILS,
-                request.apiKey.id,
-                undefined,
-                request.ip,
-                200,
-                Date.now() - startTime,
-                request.id
-            );
-
-            return {
-                success: true,
-                data: {
-                    requested: result.requested,
-                    count: result.consumed.length,
-                    consumed: result.consumed,
-                },
-            };
-        } catch (err: unknown) {
-            await mailService.logApiCall(
-                MAIL_LOG_ACTIONS.CONSUME_EMAILS,
                 request.apiKey?.id,
                 undefined,
                 request.ip,

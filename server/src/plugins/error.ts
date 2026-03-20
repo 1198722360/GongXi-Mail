@@ -1,6 +1,7 @@
 import { type FastifyPluginAsync, type FastifyError, type FastifyReply, type FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { ZodError } from 'zod';
+import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 
 export class AppError extends Error {
@@ -51,6 +52,17 @@ const errorPlugin: FastifyPluginAsync = async (fastify) => {
                 error: {
                     code: 'VALIDATION_ERROR',
                     message: error.message,
+                },
+            });
+        }
+
+        if ((error.statusCode || 500) === 413) {
+            return reply.status(413).send({
+                success: false,
+                requestId: request.id,
+                error: {
+                    code: 'PAYLOAD_TOO_LARGE',
+                    message: `Request body is too large. Max size is ${env.HTTP_BODY_LIMIT_MB}MB.`,
                 },
             });
         }

@@ -4,6 +4,7 @@ import 'dotenv/config';
 const envSchema = z.object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     PORT: z.coerce.number().default(3000),
+    HTTP_BODY_LIMIT_MB: z.coerce.number().int().min(1).max(100).default(100),
 
     // Database
     DATABASE_URL: z.string().url(),

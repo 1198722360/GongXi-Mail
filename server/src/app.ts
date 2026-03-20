@@ -31,6 +31,7 @@ export async function buildApp() {
         requestIdLogLabel: 'requestId',
         disableRequestLogging: true,
         loggerInstance: logger,
+        bodyLimit: env.HTTP_BODY_LIMIT_MB * 1024 * 1024,
     });
 
     const parsedCorsOrigins = (env.CORS_ORIGIN || '')

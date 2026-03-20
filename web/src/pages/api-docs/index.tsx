@@ -14,7 +14,6 @@ const ApiDocsPage: React.FC = () => {
 
   const logActionDescriptions: Record<string, string> = {
     get_email: '分配邮箱',
-    consume_emails: '批量消耗邮箱',
     mail_new: '获取最新邮件',
     mail_text: '获取邮件文本',
     mail_all: '获取所有邮件',
@@ -72,43 +71,6 @@ const ApiDocsPage: React.FC = () => {
   "error": {
     "code": "NO_UNUSED_EMAIL",
     "message": "No unused emails available."
-  }
-}`,
-    },
-    {
-      name: '批量消耗邮箱',
-      method: 'POST',
-      path: '/api/consume-emails',
-      description: '批量传入邮箱地址并标记为当前 API Key 已消耗。接口会自动跳过不存在、不可访问、非 ACTIVE 或已消耗的邮箱，只返回本次成功消耗的邮箱。',
-      params: [
-        { name: 'emails', type: 'string[]', required: true, desc: '要批量消耗的邮箱地址数组，最多 1000 个' },
-      ],
-      example: `curl -X POST "${baseUrl}/api/consume-emails" \\
-  -H "X-API-Key: sk_your_api_key" \\
-  -H "Content-Type: application/json" \\
-  -d '{"emails":["example1@outlook.com","example2@outlook.com"]}'`,
-      successResponse: `{
-  "success": true,
-  "data": {
-    "requested": 2,
-    "count": 2,
-    "consumed": [
-      {
-        "id": 1,
-        "email": "example1@outlook.com"
-      },
-      {
-        "id": 2,
-        "email": "example2@outlook.com"
-      }
-    ]
-  }
-}`,
-      errorResponse: `{
-  "success": false,
-  "error": {
-    "code": "AUTH_REQUIRED",
-    "message": "API Key required"
   }
 }`,
     },
@@ -339,7 +301,6 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
             <ul style={{ marginBottom: 8, paddingLeft: 20 }}>
               <li><strong>直接访问</strong>：如果您已知目标邮箱地址，可直接调用 <code>/api/mail_new</code> 或 <code>/api/mail_all</code> 获取邮件，无需任何前置分配操作。</li>
               <li><strong>自动分配</strong>：如果你需要一个新的、未使用的邮箱，请调用 <code>/api/get-email</code>。这将返回一个随机邮箱及其密码，并标记为您已使用，避免重复。</li>
-              <li><strong>批量消耗</strong>：如果你已经拿到一批邮箱地址，希望统一占用，请调用 <code>/api/consume-emails</code> 批量标记，响应中会返回本次成功消耗的邮箱。</li>
               <li><strong>文本提速</strong>：对于自动化脚本，推荐使用 <code>/api/mail_text</code> 配合正则匹配，直接获取验证码等核心信息。</li>
             </ul>
           </div>

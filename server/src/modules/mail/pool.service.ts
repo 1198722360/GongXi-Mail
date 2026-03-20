@@ -8,11 +8,6 @@ interface ApiKeyScope {
     allowedEmailIds?: number[];
 }
 
-interface ConsumedEmailItem {
-    id: number;
-    email: string;
-}
-
 function hasErrorCode(error: unknown, code: string): boolean {
     if (!error || typeof error !== 'object') {
         return false;
@@ -99,20 +94,6 @@ function applyScopeToEmailWhere(
 
     return where;
 }
-
-async function createEmailUsage(apiKeyId: number, emailAccountId: number): Promise<void> {
-    try {
-        await prisma.emailUsage.create({
-            data: { apiKeyId, emailAccountId, usedAt: new Date() },
-        });
-    } catch (error: unknown) {
-        if (hasErrorCode(error, 'P2002')) {
-            throw new AppError('ALREADY_USED', 'Email already allocated to this API Key', 409);
-        }
-        throw error;
-    }
-}
-
 export const poolService = {
     async getApiKeyScope(apiKeyId: number): Promise<ApiKeyScope> {
         return getApiKeyScope(apiKeyId);
@@ -175,71 +156,16 @@ export const poolService = {
      * 标记邮箱已被使用
      */
     async markUsed(apiKeyId: number, emailAccountId: number) {
-        await createEmailUsage(apiKeyId, emailAccountId);
-    },
-
-    async consumeEmails(apiKeyId: number, emailAddresses: string[]): Promise<{ requested: number; consumed: ConsumedEmailItem[] }> {
-        const scope = await getApiKeyScope(apiKeyId);
-        const normalizedEmails = Array.from(
-            new Set(
-                emailAddresses
-                    .map((email) => email.trim())
-                    .filter((email) => email.length > 0)
-            )
-        );
-
-        if (normalizedEmails.length === 0) {
-            return { requested: 0, consumed: [] };
+        try {
+            await prisma.emailUsage.create({
+                data: { apiKeyId, emailAccountId, usedAt: new Date() },
+            });
+        } catch (error: unknown) {
+            if (hasErrorCode(error, 'P2002')) {
+                throw new AppError('ALREADY_USED', 'Email already allocated to this API Key', 409);
+            }
+            throw error;
         }
-
-        const emailAccounts = await prisma.emailAccount.findMany({
-            where: {
-                email: { in: normalizedEmails },
-                status: 'ACTIVE',
-            },
-            select: {
-                id: true,
-                email: true,
-                groupId: true,
-            },
-        });
-
-        const emailMap = new Map(
-            emailAccounts.map((emailAccount: { id: number; email: string; groupId: number | null }) => [
-                emailAccount.email,
-                emailAccount,
-            ])
-        );
-        const consumed: ConsumedEmailItem[] = [];
-
-        for (const emailAddress of normalizedEmails) {
-            const emailAccount = emailMap.get(emailAddress);
-            if (!emailAccount) {
-                continue;
-            }
-
-            if (!isEmailInScope(scope, emailAccount.id, emailAccount.groupId ?? null)) {
-                continue;
-            }
-
-            try {
-                await createEmailUsage(apiKeyId, emailAccount.id);
-                consumed.push({
-                    id: emailAccount.id,
-                    email: emailAccount.email,
-                });
-            } catch (error: unknown) {
-                if (hasErrorCode(error, 'ALREADY_USED')) {
-                    continue;
-                }
-                throw error;
-            }
-        }
-
-        return {
-            requested: normalizedEmails.length,
-            consumed,
-        };
     },
 
     /**
