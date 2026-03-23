@@ -18,6 +18,17 @@ interface AllocatedEmailRow {
     fetchStrategy: MailFetchStrategy | null;
 }
 
+interface AllocationAttemptRow {
+    candidateId: number;
+    id: number | null;
+    email: string | null;
+    password: string | null;
+    clientId: string | null;
+    refreshToken: string | null;
+    groupId: number | null;
+    fetchStrategy: MailFetchStrategy | null;
+}
+
 function hasErrorCode(error: unknown, code: string): boolean {
     if (!error || typeof error !== 'object') {
         return false;
@@ -116,6 +127,10 @@ function mapAllocatedEmail(row: AllocatedEmailRow) {
         fetchStrategy: row.fetchStrategy || 'GRAPH_FIRST',
     };
 }
+
+async function sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+}
 export const poolService = {
     async getApiKeyScope(apiKeyId: number): Promise<ApiKeyScope> {
         return getApiKeyScope(apiKeyId);
@@ -177,6 +192,7 @@ export const poolService = {
     async allocateUnusedEmail(apiKeyId: number, groupName?: string) {
         const scope = await getApiKeyScope(apiKeyId);
         const groupId = await resolveGroupId(groupName);
+        const maxAttempts = 5;
 
         if (groupId !== undefined && scope.allowedGroupIds && !scope.allowedGroupIds.includes(groupId)) {
             throw new AppError('GROUP_FORBIDDEN', 'This API Key cannot access the selected group', 403);
@@ -206,40 +222,57 @@ export const poolService = {
 
         const whereClause = Prisma.sql`${Prisma.join(conditions, ' AND ')}`;
 
-        const rows = await prisma.$queryRaw<AllocatedEmailRow[]>(Prisma.sql`
-            WITH candidate AS (
-                SELECT ea.id
-                FROM email_accounts ea
-                WHERE ${whereClause}
-                ORDER BY ea.id ASC
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-            ),
-            inserted AS (
-                INSERT INTO email_usage (api_key_id, email_account_id, used_at)
-                SELECT ${apiKeyId}, candidate.id, NOW()
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const rows = await prisma.$queryRaw<AllocationAttemptRow[]>(Prisma.sql`
+                WITH candidate AS (
+                    SELECT ea.id
+                    FROM email_accounts ea
+                    WHERE ${whereClause}
+                    ORDER BY ea.id ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                ),
+                inserted AS (
+                    INSERT INTO email_usage (api_key_id, email_account_id, used_at)
+                    SELECT ${apiKeyId}, candidate.id, NOW()
+                    FROM candidate
+                    ON CONFLICT (api_key_id, email_account_id) DO NOTHING
+                    RETURNING email_account_id
+                )
+                SELECT
+                    candidate.id AS "candidateId",
+                    ea.id,
+                    ea.email,
+                    ea.password,
+                    ea.client_id AS "clientId",
+                    ea.refresh_token AS "refreshToken",
+                    ea.group_id AS "groupId",
+                    eg.fetch_strategy AS "fetchStrategy"
                 FROM candidate
-                ON CONFLICT (api_key_id, email_account_id) DO NOTHING
-                RETURNING email_account_id
-            )
-            SELECT
-                ea.id,
-                ea.email,
-                ea.password,
-                ea.client_id AS "clientId",
-                ea.refresh_token AS "refreshToken",
-                ea.group_id AS "groupId",
-                eg.fetch_strategy AS "fetchStrategy"
-            FROM inserted
-            JOIN email_accounts ea ON ea.id = inserted.email_account_id
-            LEFT JOIN email_groups eg ON eg.id = ea.group_id
-        `);
+                LEFT JOIN inserted ON inserted.email_account_id = candidate.id
+                LEFT JOIN email_accounts ea ON ea.id = inserted.email_account_id
+                LEFT JOIN email_groups eg ON eg.id = ea.group_id
+            `);
 
-        if (rows.length === 0) {
-            return null;
+            const row = rows[0];
+            if (row && row.id !== null && row.email && row.clientId && row.refreshToken) {
+                return mapAllocatedEmail({
+                    id: row.id,
+                    email: row.email,
+                    password: row.password,
+                    clientId: row.clientId,
+                    refreshToken: row.refreshToken,
+                    groupId: row.groupId,
+                    fetchStrategy: row.fetchStrategy,
+                });
+            }
+
+            if (attempt < maxAttempts - 1) {
+                await sleep((attempt + 1) * 20);
+            }
         }
 
-        return mapAllocatedEmail(rows[0]);
+        return null;
     },
 
     /**
