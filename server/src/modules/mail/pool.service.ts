@@ -204,7 +204,7 @@ export const poolService = {
             conditions.push(Prisma.sql`ea.id IN (${Prisma.join(scope.allowedEmailIds)})`);
         }
 
-        const whereClause = Prisma.sql`${Prisma.join(conditions, Prisma.sql` AND `)}`;
+        const whereClause = Prisma.sql`${Prisma.join(conditions, ' AND ')}`;
 
         const rows = await prisma.$queryRaw<AllocatedEmailRow[]>(Prisma.sql`
             WITH candidate AS (
