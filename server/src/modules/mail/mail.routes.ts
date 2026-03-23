@@ -40,13 +40,6 @@ function getErrorMessage(err: unknown): string {
     return typeof message === 'string' && message.trim() ? message : 'Unknown error';
 }
 
-function hasErrorCode(err: unknown, code: string): boolean {
-    if (!err || typeof err !== 'object') {
-        return false;
-    }
-    return (err as { code?: unknown }).code === code;
-}
-
 function getGroupNameFromRequest(method: string, query: unknown, body: unknown): string | undefined {
     const params = (method === 'GET' ? query : body) as Record<string, unknown> | undefined;
     const groupName = params?.group;
@@ -69,47 +62,33 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.GET_EMAIL);
 
             const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
-
-            // 重试 3 次，防止并发冲突
-            for (let i = 0; i < 3; i++) {
-                const email = await poolService.getUnusedEmail(request.apiKey.id, groupName);
-                if (!email) {
-                    const stats = await poolService.getStats(request.apiKey.id, groupName);
-                    throw new AppError(
-                        'NO_UNUSED_EMAIL',
-                        `No unused emails available${groupName ? ` in group '${groupName}'` : ''}. Used: ${stats.used}/${stats.total}`,
-                        400
-                    );
-                }
-
-                try {
-                    await poolService.markUsed(request.apiKey.id, email.id);
-                    await mailService.logApiCall(
-                        MAIL_LOG_ACTIONS.GET_EMAIL,
-                        request.apiKey.id,
-                        email.id,
-                        request.ip,
-                        200,
-                        Date.now() - startTime,
-                        request.id
-                    );
-                    return {
-                        success: true,
-                        data: {
-                            email: email.email,
-                            id: email.id,
-                            password: email.password,
-                        },
-                    };
-                } catch (err: unknown) {
-                    if (hasErrorCode(err, 'ALREADY_USED')) {
-                        continue;
-                    }
-                    throw err;
-                }
+            const email = await poolService.allocateUnusedEmail(request.apiKey.id, groupName);
+            if (!email) {
+                const stats = await poolService.getStats(request.apiKey.id, groupName);
+                throw new AppError(
+                    'NO_UNUSED_EMAIL',
+                    `No unused emails available${groupName ? ` in group '${groupName}'` : ''}. Used: ${stats.used}/${stats.total}`,
+                    400
+                );
             }
 
-            throw new AppError('CONCURRENCY_LIMIT', 'System busy, please try again', 429);
+            await mailService.logApiCall(
+                MAIL_LOG_ACTIONS.GET_EMAIL,
+                request.apiKey.id,
+                email.id,
+                request.ip,
+                200,
+                Date.now() - startTime,
+                request.id
+            );
+            return {
+                success: true,
+                data: {
+                    email: email.email,
+                    id: email.id,
+                    password: email.password,
+                },
+            };
         } catch (err: unknown) {
             await mailService.logApiCall(
                 MAIL_LOG_ACTIONS.GET_EMAIL,

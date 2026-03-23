@@ -78,7 +78,7 @@ export const mailService = {
                 throw new AppError('AUTH_REQUIRED', 'Auto assignment requires API Key authentication', 400);
             }
 
-            const account = await poolService.getUnusedEmail(apiKeyId);
+            const account = await poolService.allocateUnusedEmail(apiKeyId);
             if (!account) {
                 const stats = await poolService.getStats(apiKeyId);
                 throw new AppError(

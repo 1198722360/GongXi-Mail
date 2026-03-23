@@ -1,11 +1,21 @@
 import prisma from '../../lib/prisma.js';
 import { decrypt } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
-import type { Prisma } from '@prisma/client';
+import { Prisma, type MailFetchStrategy } from '@prisma/client';
 
 interface ApiKeyScope {
     allowedGroupIds?: number[];
     allowedEmailIds?: number[];
+}
+
+interface AllocatedEmailRow {
+    id: number;
+    email: string;
+    password: string | null;
+    clientId: string;
+    refreshToken: string;
+    groupId: number | null;
+    fetchStrategy: MailFetchStrategy | null;
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
@@ -94,6 +104,18 @@ function applyScopeToEmailWhere(
 
     return where;
 }
+
+function mapAllocatedEmail(row: AllocatedEmailRow) {
+    return {
+        id: row.id,
+        email: row.email,
+        password: row.password ? decrypt(row.password) : null,
+        clientId: row.clientId,
+        refreshToken: decrypt(row.refreshToken),
+        groupId: row.groupId,
+        fetchStrategy: row.fetchStrategy || 'GRAPH_FIRST',
+    };
+}
 export const poolService = {
     async getApiKeyScope(apiKeyId: number): Promise<ApiKeyScope> {
         return getApiKeyScope(apiKeyId);
@@ -150,6 +172,74 @@ export const poolService = {
             refreshToken: decrypt(email.refreshToken),
             fetchStrategy: email.group?.fetchStrategy || 'GRAPH_FIRST',
         };
+    },
+
+    async allocateUnusedEmail(apiKeyId: number, groupName?: string) {
+        const scope = await getApiKeyScope(apiKeyId);
+        const groupId = await resolveGroupId(groupName);
+
+        if (groupId !== undefined && scope.allowedGroupIds && !scope.allowedGroupIds.includes(groupId)) {
+            throw new AppError('GROUP_FORBIDDEN', 'This API Key cannot access the selected group', 403);
+        }
+
+        const conditions: Prisma.Sql[] = [
+            Prisma.sql`ea.status = 'ACTIVE'`,
+            Prisma.sql`
+                NOT EXISTS (
+                    SELECT 1
+                    FROM email_usage eu
+                    WHERE eu.email_account_id = ea.id
+                      AND eu.api_key_id = ${apiKeyId}
+                )
+            `,
+        ];
+
+        if (groupId !== undefined) {
+            conditions.push(Prisma.sql`ea.group_id = ${groupId}`);
+        } else if (scope.allowedGroupIds) {
+            conditions.push(Prisma.sql`ea.group_id IN (${Prisma.join(scope.allowedGroupIds)})`);
+        }
+
+        if (scope.allowedEmailIds) {
+            conditions.push(Prisma.sql`ea.id IN (${Prisma.join(scope.allowedEmailIds)})`);
+        }
+
+        const whereClause = Prisma.sql`${Prisma.join(conditions, Prisma.sql` AND `)}`;
+
+        const rows = await prisma.$queryRaw<AllocatedEmailRow[]>(Prisma.sql`
+            WITH candidate AS (
+                SELECT ea.id
+                FROM email_accounts ea
+                WHERE ${whereClause}
+                ORDER BY ea.id ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            ),
+            inserted AS (
+                INSERT INTO email_usage (api_key_id, email_account_id, used_at)
+                SELECT ${apiKeyId}, candidate.id, NOW()
+                FROM candidate
+                ON CONFLICT (api_key_id, email_account_id) DO NOTHING
+                RETURNING email_account_id
+            )
+            SELECT
+                ea.id,
+                ea.email,
+                ea.password,
+                ea.client_id AS "clientId",
+                ea.refresh_token AS "refreshToken",
+                ea.group_id AS "groupId",
+                eg.fetch_strategy AS "fetchStrategy"
+            FROM inserted
+            JOIN email_accounts ea ON ea.id = inserted.email_account_id
+            LEFT JOIN email_groups eg ON eg.id = ea.group_id
+        `);
+
+        if (rows.length === 0) {
+            return null;
+        }
+
+        return mapAllocatedEmail(rows[0]);
     },
 
     /**
