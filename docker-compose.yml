@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "3007:3000"
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -26,7 +26,7 @@ services:
     networks:
       - app-network
     volumes:
-      - app_logs:/app/server/logs
+      - ./app_logs:/app/server/logs
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
       interval: 30s
@@ -47,7 +47,7 @@ services:
       timeout: 5s
       retries: 5
     volumes:
-      - redis_data:/data
+      - ./redis_data:/data
     command: redis-server --appendonly yes
 
   postgres:
@@ -68,7 +68,7 @@ services:
       retries: 10
       start_period: 30s
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./postgres_data:/var/lib/postgresql/data
 
 networks:
   app-network:
